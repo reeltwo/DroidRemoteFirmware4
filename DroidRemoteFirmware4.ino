@@ -164,6 +164,30 @@ bool otaInProgress;
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#ifdef ST7789V_DRIVER
+#define TOUCH_MODULES_CST_MUTUAL
+#define USE_TOUCH
+#include "TouchLib.h"
+TouchLib touch(Wire, PIN_IIC_SDA, PIN_IIC_SCL, CTS328_SLAVE_ADDRESS, PIN_TOUCH_RES);
+
+static void lv_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
+{
+    if (touch.read())
+    {
+        TP_Point t = touch.getPoint(0);
+        data->point.x = t.x;
+        data->point.y = t.y;
+        data->state = LV_INDEV_STATE_PR;
+    }
+    else
+    {
+        data->state = LV_INDEV_STATE_REL;
+    }
+}
+#endif
+
+///////////////////////////////////////////////////////////////////////////////
+
 #ifdef USE_WIFI
 String getHostName()
 {
@@ -222,6 +246,7 @@ Preferences preferences;
 #define PREFERENCE_REMOTE_SECRET        "rsecret"
 #define PREFERENCE_REMOTE_PAIRED        "rpaired"
 #define PREFERENCE_REMOTE_LMK           "rlmk"
+#define PREFERENCE_REMOTE_AUTOMASTER    "rmaster"
 #define PREFERENCE_WIFI_ENABLED         "wifi"
 #define PREFERENCE_WIFI_SSID            "ssid"
 #define PREFERENCE_WIFI_PASS            "pass"
@@ -395,6 +420,22 @@ void setupLCD()
     lv_disp_drv_register(&disp_drv);
     digitalWrite(PIN_LCD_BL, HIGH);
 
+#ifdef USE_TOUCH
+    if (touch.init())
+    {
+        touch.setRotation(1);
+        static lv_indev_drv_t indev_drv;
+        lv_indev_drv_init(&indev_drv);
+        indev_drv.type = LV_INDEV_TYPE_POINTER;
+        indev_drv.read_cb = lv_touchpad_read;
+        lv_indev_drv_register(&indev_drv);
+    }
+    else
+    {
+        DEBUG_PRINTLN("Failed to initialize touch screen");
+    }
+#endif
+
     if (!sBooted)
     {
         // Only draw splash screen on first boot
@@ -548,6 +589,18 @@ void setup()
         if (preferences.getBytes(PREFERENCE_REMOTE_LMK, &key, sizeof(SMQLMK)) == sizeof(SMQLMK))
         {
             SMQ::setLocalMasterKey(&key);
+        }
+        else if (preferences.getBool(PREFERENCE_REMOTE_AUTOMASTER, true))
+        {
+            // By default if no master key is available we will create a new master key and
+            // set a flag not to do it again unless the device is reset to factory defaults.
+            SMQLMK lmk;
+            printf("New Master Key Generated.\n");
+            SMQ::createLocalMasterKey(&lmk);
+            preferences.putBytes(PREFERENCE_REMOTE_LMK, &lmk, sizeof(lmk));
+            SMQ::setLocalMasterKey(&lmk);
+            // Disable auto master key generation
+            preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
         }
 
         SMQAddressKey pairedHosts[SMQ_MAX_PAIRED_HOSTS];
@@ -800,7 +853,7 @@ void reboot()
 
 void processConfigureCommand(const char* cmd)
 {
-    if (startswith(cmd, "#DPFACTORY"))
+    if (startswith(cmd, "#DRFACTORY"))
     {
         preferences.clear();
         reboot();
